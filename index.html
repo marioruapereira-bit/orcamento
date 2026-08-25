@@ -4,7 +4,7 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Orçamento Pessoal — Painel</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- No SheetJS needed - reads CSV from Google Sheets -->
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 :root{--bg:#E7EBE9;--surface:#FBFCFB;--ink:#17211E;--muted:#5C6B66;--faint:#8B968F;--line:#D3DAD7;--accent:#1F6E5A;--warn:#B5533A;--gold:#B98A3C;}
@@ -61,83 +61,90 @@ const sd=d=>(d||"").replace(/^COMPRA \d* ?/,"").replace(/^DD /,"").replace(/ CON
 const gm=c=>c.includes(" - ")?c.split(" - ")[0].trim():c;
 const gs=c=>c.includes(" - ")?c.split(" - ")[1].trim():null;
 
-let S={data:null,month:null,ec:null,fc:null,search:"",fileName:null,fileHandle:null,rawBuf:null,editIdx:null,hovPie:null};
+const URLS={
+  tx:"https://docs.google.com/spreadsheets/d/e/2PACX-1vTaiRIdZYZ-M1Ak-6pcZbHDMrbh50y_9BiZH_GaVFXNZWQ91EPwOtKI68EgQln_fOJVdsu_5eCfPMM2/pub?gid=146501383&single=true&output=csv",
+  orc:"https://docs.google.com/spreadsheets/d/e/2PACX-1vTaiRIdZYZ-M1Ak-6pcZbHDMrbh50y_9BiZH_GaVFXNZWQ91EPwOtKI68EgQln_fOJVdsu_5eCfPMM2/pub?gid=2007161233&single=true&output=csv",
+  rec:"https://docs.google.com/spreadsheets/d/e/2PACX-1vTaiRIdZYZ-M1Ak-6pcZbHDMrbh50y_9BiZH_GaVFXNZWQ91EPwOtKI68EgQln_fOJVdsu_5eCfPMM2/pub?gid=2134268800&single=true&output=csv"
+};
 
-// ---- IDB ----
-const IDB="orcamento-db",STORE="handles";
-function idb(){return new Promise((r,j)=>{const q=indexedDB.open(IDB,1);q.onupgradeneeded=()=>q.result.createObjectStore(STORE);q.onsuccess=()=>r(q.result);q.onerror=()=>j(q.error);});}
-async function saveH(h){try{(await idb()).transaction(STORE,"readwrite").objectStore(STORE).put(h,"excel");}catch(e){}}
-async function loadH(){try{const db=await idb();return new Promise(r=>{const g=db.transaction(STORE,"readonly").objectStore(STORE).get("excel");g.onsuccess=()=>r(g.result||null);g.onerror=()=>r(null);});}catch(e){return null;}}
-function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2200);}
+let S={data:null,month:null,ec:null,fc:null,search:"",hovPie:null,loading:true};
 
-// ---- Parse ----
-function parse(buf){
-  const wb=XLSX.read(buf,{cellDates:true});
-  const get=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:null}):[];
-  const orc=get("Orçamento").filter(r=>r["Categoria"]&&r["Categoria"]!=="TOTAL");
-  const budget={},catOrder=[];
-  orc.forEach(r=>{const k=r["Subcategoria"]?r["Categoria"]+" - "+r["Subcategoria"]:r["Categoria"];budget[k]=Number(r["Orçamento Mensal (€)"]||0);catOrder.push(k);});
-  const txR=get("Transações").filter(r=>r["Data"]!=null&&r["Valor (€)"]!=null);
-  const tx=txR.map((r,i)=>{let d=r["Data"],iso;if(d instanceof Date)iso=d.toISOString().slice(0,10);else{const s=String(d);iso=s.length>=10?s.slice(0,10):s;}
-    return{date:iso,desc:String(r["Descrição"]||""),cat:r["Subcategoria"]?r["Categoria"]+" - "+r["Subcategoria"]:(r["Categoria"]||"Outros"),amount:Math.abs(Number(r["Valor (€)"]||0)),_row:i+2};});
-  const rec=get("Despesas Recorrentes").filter(r=>r["Nome"]&&r["Nome"]!=="TOTAL MENSAL EQUIVALENTE").map(r=>({name:r["Nome"],monthly:r["Frequência"]==="Anual"?Number(r["Valor (€)"]||0)/12:Number(r["Valor (€)"]||0)}));
-  return{budget,catOrder,transactions:tx,recurring:rec};
+// ---- CSV Parser ----
+function parseCSV(text){
+  const lines=text.split("\n").filter(l=>l.trim());
+  if(lines.length<2)return[];
+  const headers=parseCSVLine(lines[0]);
+  return lines.slice(1).map(l=>{const vals=parseCSVLine(l);const obj={};headers.forEach((h,i)=>obj[h]=vals[i]||"");return obj;});
 }
-async function loadFile(f){const buf=await f.arrayBuffer();S.rawBuf=buf.slice(0);S.data=parse(buf);S.fileName=f.name;
-  const ms=[...new Set(S.data.transactions.map(t=>t.date.slice(0,7)))].sort();S.month=ms[ms.length-1]||null;
-  S.ec=null;S.fc=null;S.search="";S.editIdx=null;S.hovPie=null;render();}
+function parseCSVLine(line){
+  const result=[];let cur="",inQ=false;
+  for(let i=0;i<line.length;i++){
+    const c=line[i];
+    if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ;}
+    else if(c===","&&!inQ){result.push(cur.trim());cur="";}
+    else cur+=c;
+  }
+  result.push(cur.trim());return result;
+}
 
-// ---- File I/O ----
-async function pickFile(){
-  if(window.showOpenFilePicker){try{const[h]=await window.showOpenFilePicker({types:[{description:"Excel",accept:{"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":[".xlsx"]}}]});
-    let p=await h.queryPermission({mode:"readwrite"});if(p!=="granted")p=await h.requestPermission({mode:"readwrite"});
-    S.fileHandle=h;await saveH(h);await loadFile(await h.getFile());}catch(e){if(e?.name!=="AbortError")showErr(e.message);}
-  }else{const inp=document.createElement("input");inp.type="file";inp.accept=".xlsx";inp.onchange=async()=>{if(inp.files[0])await loadFile(inp.files[0]);};inp.click();}}
-async function reopenLast(){const h=await loadH();if(!h)return;try{let p=await h.queryPermission({mode:"readwrite"});if(p!=="granted")p=await h.requestPermission({mode:"readwrite"});if(p!=="granted")return;S.fileHandle=h;await loadFile(await h.getFile());}catch(e){}}
-async function refresh(){if(S.fileHandle){try{await loadFile(await S.fileHandle.getFile());return;}catch(e){}}pickFile();}
-function showErr(m){const e=document.querySelector(".err");if(e)e.textContent=m;}
+// ---- Load from Google Sheets ----
+async function loadData(){
+  S.loading=true;render();
+  try{
+    const[txR,orcR,recR]=await Promise.all([fetch(URLS.tx),fetch(URLS.orc),fetch(URLS.rec)]);
+    const[txT,orcT,recT]=await Promise.all([txR.text(),orcR.text(),recR.text()]);
+    const txRows=parseCSV(txT).filter(r=>r["Data"]&&r["Valor (€)"]);
+    const orcRows=parseCSV(orcT).filter(r=>r["Categoria"]&&r["Categoria"]!=="TOTAL");
+    const recRows=parseCSV(recT).filter(r=>r["Nome"]&&r["Nome"]!=="TOTAL MENSAL EQUIVALENTE"&&r["Nome"].trim());
 
-// ---- Write-back ----
-async function writeCat(idx,newCat){
-  const tx=S.data.transactions[idx],old=tx.cat;tx.cat=newCat;
-  if(S.rawBuf&&S.fileHandle){try{const wb=XLSX.read(S.rawBuf,{cellDates:true}),ws=wb.Sheets["Transações"];
-    if(ws){const r=tx._row,cC=XLSX.utils.encode_cell({r:r-1,c:2}),cD=XLSX.utils.encode_cell({r:r-1,c:3});
-      ws[cC]={t:"s",v:gm(newCat)};ws[cD]={t:"s",v:gs(newCat)||""};
-      const out=XLSX.write(wb,{bookType:"xlsx",type:"buffer"});const w=await S.fileHandle.createWritable();await w.write(out);await w.close();
-      S.rawBuf=out.buffer||out;toast("✓ Excel atualizado — "+sc(newCat));}
-  }catch(e){tx.cat=old;toast("Erro: "+e.message);}}else toast("Alterado (sem permissão de escrita)");
-  S.editIdx=null;render();}
+    const budget={},catOrder=[];
+    orcRows.forEach(r=>{const k=r["Subcategoria"]?r["Categoria"]+" - "+r["Subcategoria"]:r["Categoria"];
+      budget[k]=parseFloat(r["Orçamento Mensal (€)"])||0;catOrder.push(k);});
 
-// ---- Compute ----
+    const transactions=txRows.map(r=>{
+      const cat=r["Subcategoria"]?r["Categoria"]+" - "+r["Subcategoria"]:(r["Categoria"]||"Outros");
+      // Parse date: could be M/D/YYYY or YYYY-MM-DD
+      let iso=r["Data"];
+      if(iso.includes("/")){const p=iso.split("/");iso=p[2]+"-"+p[0].padStart(2,"0")+"-"+p[1].padStart(2,"0");}
+      return{date:iso,desc:r["Descrição"]||"",cat,amount:Math.abs(parseFloat(r["Valor (€)"])||0)};
+    });
+
+    const recurring=recRows.map(r=>({name:r["Nome"],
+      monthly:r["Frequência"]==="Anual"?(parseFloat(r["Valor (€)"])||0)/12:(parseFloat(r["Valor (€)"])||0)}));
+
+    S.data={budget,catOrder,transactions,recurring};
+    const ms=[...new Set(transactions.map(t=>t.date.slice(0,7)))].sort();
+    S.month=ms[ms.length-1]||null;
+    S.ec=null;S.fc=null;S.search="";S.hovPie=null;
+  }catch(e){S.data=null;console.error("Load error:",e);}
+  S.loading=false;render();
+}
+
+// ---- Compute (same as before) ----
 function compute(){
   const D=S.data,m=S.month,allTx=D.transactions;
   const monthTx=m?allTx.filter(t=>t.date.startsWith(m)):allTx;
   const months=[...new Set(allTx.map(t=>t.date.slice(0,7)))].sort();
   const nM=m?1:12;const bT=Object.values(D.budget).reduce((a,b)=>a+b,0);const vB=bT*nM;
   const mT=monthTx.reduce((a,t)=>a+t.amount,0);const rM=D.recurring.reduce((a,r)=>a+(r.monthly||0),0);
-  // grouped
   const map={};D.catOrder.forEach(k=>{const main=gm(k),sub=gs(k);if(!map[main])map[main]={budget:0,spent:0,subs:[]};
     const sp=monthTx.filter(t=>t.cat===k).reduce((a,t)=>a+t.amount,0);map[main].budget+=D.budget[k]*nM;map[main].spent+=sp;
     if(sub)map[main].subs.push({key:k,subLabel:sub,budget:D.budget[k]*nM,spent:sp});});
   const grouped=Object.entries(map).map(([main,v])=>({main,...v})).sort((a,b)=>b.spent-a.spent);
-  // trend (reacts to filter)
   const fc=S.fc,ec=S.ec;
   const trend=months.map(mo=>{let txm=allTx.filter(t=>t.date.startsWith(mo));let orc=bT;
     if(fc){txm=txm.filter(t=>t.cat===fc);orc=D.budget[fc]||0;}
     else if(ec){txm=txm.filter(t=>gm(t.cat)===ec);orc=D.catOrder.filter(k=>gm(k)===ec).reduce((a,k)=>a+(D.budget[k]||0),0);}
     return{mo,label:ML[mo.slice(5,7)]||mo,gasto:txm.reduce((a,t)=>a+t.amount,0),orc};});
-  // pie
   const pieMap={};monthTx.forEach(t=>{const main=gm(t.cat);pieMap[main]=(pieMap[main]||0)+t.amount;});
   const pieData=Object.entries(pieMap).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]).map(([n,v])=>({name:n,value:v}));
   const pieTotal=pieData.reduce((a,d)=>a+d.value,0);
-  // pie segments
   const R=80,r=50,cx=100,cy=100;let a0=-Math.PI/2;
   const pieSegs=pieData.map(d=>{const frac=d.value/pieTotal;const a1=a0+frac*2*Math.PI;
     const x0=cx+R*Math.cos(a0),y0=cy+R*Math.sin(a0),x1=cx+R*Math.cos(a1),y1=cy+R*Math.sin(a1);
     const xi1=cx+r*Math.cos(a1),yi1=cy+r*Math.sin(a1),xi0=cx+r*Math.cos(a0),yi0=cy+r*Math.sin(a0);
     const large=(a1-a0)>Math.PI?1:0;const path=`M${x0} ${y0} A${R} ${R} 0 ${large} 1 ${x1} ${y1} L${xi1} ${yi1} A${r} ${r} 0 ${large} 0 ${xi0} ${yi0} Z`;
     a0=a1;return{path,color:CC[d.name]||"#888",name:d.name,value:d.value,pct:Math.round(frac*100)};});
-  // vis
   let vis=monthTx.slice();if(fc)vis=vis.filter(t=>t.cat===fc);else if(ec)vis=vis.filter(t=>gm(t.cat)===ec);
   if(S.search){const q=S.search.toLowerCase();vis=vis.filter(t=>t.desc.toLowerCase().includes(q)||t.cat.toLowerCase().includes(q));}
   vis.sort((a,b)=>a.date<b.date?1:-1);
@@ -167,32 +174,31 @@ function pieSVG(segs,total,hov){
 // ---- Render ----
 function render(){
   const app=document.getElementById("app");
+  if(S.loading){app.innerHTML=`<div class="head"><div><div class="eyebrow">Orçamento pessoal · 2026</div><div class="title">O teu mês, ao cêntimo</div></div></div>
+    <div class="empty"><h2 style="font-family:'Fraunces',serif">A carregar dados...</h2><p>A ler do Google Sheets.</p></div>`;return;}
   if(!S.data){app.innerHTML=`<div class="head"><div><div class="eyebrow">Orçamento pessoal · 2026</div><div class="title">O teu mês, ao cêntimo</div></div></div>
-    <div class="empty"><h2 style="font-family:'Fraunces',serif">Carrega o teu Orçamento</h2><p>Escolhe o ficheiro <b>Orcamento_Pessoal.xlsx</b>. No Chrome pede permissão de leitura e escrita para poderes alterar categorias directamente.</p>
-    <button class="btn" onclick="pickFile()">Escolher ficheiro Excel</button><div class="err"></div></div>`;return;}
+    <div class="empty"><h2 style="font-family:'Fraunces',serif">Erro ao carregar</h2><p>Não consegui ler os dados do Google Sheets. Verifica que os separadores estão publicados.</p>
+    <button class="btn" onclick="loadData()">Tentar de novo</button></div>`;return;}
 
   const C=compute(),m=S.month,diff=C.vB-C.mT,al=S.fc?sc(S.fc):S.ec?S.ec:null;
   const visTot=C.vis.reduce((a,t)=>a+t.amount,0);
+  const mBtns=C.months.map(mo=>`<button class="month-btn ${mo===m?'on':''}" onclick="S.month='${mo}';S.ec=null;S.fc=null;S.search='';S.hovPie=null;render()">${ML[mo.slice(5,7)]||mo}</button>`).join("");
 
-  // months
-  const mBtns=C.months.map(mo=>`<button class="month-btn ${mo===m?'on':''}" onclick="S.month='${mo}';S.ec=null;S.fc=null;S.search='';S.editIdx=null;S.hovPie=null;render()">${ML[mo.slice(5,7)]||mo}</button>`).join("");
-
-  // tracks
   let tracks="";
   C.grouped.forEach(g=>{
     const hs=g.subs.length>0,isE=S.ec===g.main;
     const pct=g.budget>0?g.spent/g.budget:(g.spent>0?2:0),over=g.spent>g.budget&&g.budget>0;
     const col=CC[g.main]||"#888",fw=Math.min(pct,1)*100;
     const isA=al===g.main||(S.fc&&gm(S.fc)===g.main),dim=al&&!isA?"opacity:.35":"";
-    const click=hs?`S.ec=S.ec==='${g.main}'?null:'${g.main}';S.fc=null;S.editIdx=null;render();`
-      :`S.ec=null;S.fc=S.fc==='${g.main}'?null:'${g.main}';S.editIdx=null;render();`;
+    const click=hs?`S.ec=S.ec==='${g.main}'?null:'${g.main}';S.fc=null;render();`
+      :`S.ec=null;S.fc=S.fc==='${g.main}'?null:'${g.main}';render();`;
     let subsH="";
     if(hs&&isE){subsH=`<div style="padding-left:20px;margin-top:8px;margin-bottom:10px;border-left:2px solid #E4E9E6">`;
       g.subs.filter(s=>s.spent>0||s.budget>0).forEach(sub=>{
         const sp=sub.budget>0?sub.spent/sub.budget:(sub.spent>0?2:0),so=sub.spent>sub.budget&&sub.budget>0;
         const scl=CC[sub.key]||col,sf=Math.min(sp,1)*100,sa=S.fc===sub.key,sdim=S.fc&&!sa?"opacity:.4":"";
         const esc=sub.key.replace(/'/g,"\\'");
-        subsH+=`<div style="margin-bottom:10px;cursor:pointer;${sdim}" onclick="event.stopPropagation();S.fc=S.fc==='${esc}'?null:'${esc}';S.editIdx=null;render();">
+        subsH+=`<div style="margin-bottom:10px;cursor:pointer;${sdim}" onclick="event.stopPropagation();S.fc=S.fc==='${esc}'?null:'${esc}';render();">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:3px;gap:8px">
             <span style="font-size:12px;font-weight:${sa?600:400};display:flex;align-items:center;gap:6px;color:${sa?'var(--ink)':'var(--muted)'}"><span class="dot-sm" style="background:${scl}"></span>${sub.subLabel}</span>
             <span class="mono" style="font-size:11px;color:var(--faint)"><b style="color:var(--muted)">${eur0(sub.spent)}</b> / ${eur0(sub.budget)} ${so?`<span class="over">+${eur0(sub.spent-sub.budget)}</span>`:""}</span>
@@ -205,27 +211,22 @@ function render(){
       </div><div class="track"><div class="track-fill" style="width:${fw}%;background:${over?'var(--warn)':col}"></div></div></div>${subsH}</div>`;
   });
 
-  // tx rows
-  const txR=C.vis.map((t,vi)=>{
-    const idx=S.data.transactions.indexOf(t),isEd=S.editIdx===idx;
-    const catD=isEd?`<select class="cat-select" onchange="writeCat(${idx},this.value)">${S.data.catOrder.map(k=>`<option value="${k}" ${k===t.cat?'selected':''}>${sc(k)}</option>`).join("")}</select> <button class="edit-btn" onclick="S.editIdx=null;render()">✕</button>`
-      :`<span style="color:var(--muted);font-size:11px">${sc(t.cat)}</span> <button class="edit-btn" onclick="event.stopPropagation();S.editIdx=${idx};render()">✎</button>`;
+  const txR=C.vis.map(t=>{
     return `<tr><td class="mono" style="color:var(--faint);font-size:12px">${t.date.slice(8,10)}/${t.date.slice(5,7)}${!m?"/"+t.date.slice(2,4):""}</td>
-      <td><div>${sd(t.desc)}</div><div style="margin-top:2px">${catD}</div></td><td class="r mono" style="font-weight:500">${eur(t.amount)}</td></tr>`;
+      <td><div>${sd(t.desc)}</div><div style="margin-top:2px"><span style="color:var(--muted);font-size:11px">${sc(t.cat)}</span></div></td>
+      <td class="r mono" style="font-weight:500">${eur(t.amount)}</td></tr>`;
   }).join("");
 
-  const clearB=al?`<button class="clear-btn" onclick="S.ec=null;S.fc=null;S.editIdx=null;render()">✕</button>`:"";
-
-  // pie legend
+  const clearB=al?`<button class="clear-btn" onclick="S.ec=null;S.fc=null;render()">✕</button>`:"";
   const pLeg=C.pieSegs.slice(0,8).map((d,i)=>`<div class="leg-row" style="opacity:${S.hovPie!==null&&S.hovPie!==i?.45:1}" onmouseenter="S.hovPie=${i};render()" onmouseleave="S.hovPie=null;render()">
     <span style="display:flex;align-items:center;gap:7px;color:var(--muted)"><span style="width:8px;height:8px;border-radius:3px;background:${d.color};flex-shrink:0;display:inline-block"></span>${d.name}</span>
     <span class="mono" style="color:var(--faint)">${eur0(d.value)} · ${d.pct}%</span></div>`).join("");
 
   app.innerHTML=`
   <div class="head"><div><div class="eyebrow">Orçamento pessoal · 2026</div><div class="title">O teu mês, ao cêntimo</div></div>
-    <div class="controls"><div class="month-switch">${mBtns}<button class="month-btn ${!m?'on':''}" style="font-family:inherit;font-weight:600;font-size:12px" onclick="S.month=null;S.ec=null;S.fc=null;S.search='';S.editIdx=null;S.hovPie=null;render()">Anual</button></div>
-    <button class="btn ghost" onclick="refresh()">Atualizar</button><button class="btn" onclick="pickFile()">Trocar ficheiro</button></div></div>
-  <div class="filestat mono" style="margin-bottom:18px">📄 ${S.fileName} ${S.fileHandle?'<span style="color:var(--accent)">· escrita activa</span>':'<span style="color:var(--warn)">· só leitura</span>'}</div>
+    <div class="controls"><div class="month-switch">${mBtns}<button class="month-btn ${!m?'on':''}" style="font-family:inherit;font-weight:600;font-size:12px" onclick="S.month=null;S.ec=null;S.fc=null;S.search='';S.hovPie=null;render()">Anual</button></div>
+    <button class="btn ghost" onclick="loadData()">Atualizar</button></div></div>
+  <div class="filestat mono" style="margin-bottom:18px">📊 Dados do Google Sheets · ${C.monthTx.length} movimentos carregados</div>
   <div class="kpis">
     <div class="kpi hero"><div class="rail" style="background:#3F7E6B"></div><div class="lab">${m?"Gasto no mês":"Gasto anual"}</div><div class="val mono">${eur0(C.mT)}</div><div class="sub">${C.monthTx.length} movimentos</div></div>
     <div class="kpi"><div class="rail" style="background:var(--faint)"></div><div class="lab">${m?"Orçamento":"Orçamento anual"}</div><div class="val mono">${eur0(C.vB)}</div></div>
@@ -248,7 +249,8 @@ function render(){
     </div>
   </div>`;
 }
-render();reopenLast();
+
+loadData();
 </script>
 </body>
 </html>
