@@ -11,11 +11,13 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import configuracao, notas
+from . import agregado, configuracao, notas
 from .tarefas import Tarefa, alternar_tarefa, extrair_tarefas
 
 LARGURA_NOTAS = 260
 LARGURA_TAREFAS = 300
+TODAS_PASTAS = "Todas as pastas"
+RAIZ = "(raiz)"
 
 
 class Aplicacao(ctk.CTk):
@@ -35,10 +37,12 @@ class Aplicacao(ctk.CTk):
         self._texto_guardado = ""
         self._eol = "\n"  # fim de linha do ficheiro aberto; o editor usa sempre "\n"
         self._tarefas_mostradas: tuple | None = None
+        self._modo = "Notas"  # "Notas" ou "Tarefas"
 
         self._criar_lista_notas()
         self._criar_editor()
         self._criar_painel_tarefas()
+        self._criar_painel_todos()
 
         self.bind("<Control-s>", lambda _e: self._guardar())
         self.protocol("WM_DELETE_WINDOW", self._fechar)
@@ -53,21 +57,27 @@ class Aplicacao(ctk.CTk):
     def _criar_lista_notas(self) -> None:
         barra = ctk.CTkFrame(self, width=LARGURA_NOTAS, corner_radius=0)
         barra.grid(row=0, column=0, sticky="nsew")
-        barra.grid_rowconfigure(2, weight=1)
+        barra.grid_rowconfigure(3, weight=1)
         barra.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(barra, text="Escolher pasta…", command=self._escolher_pasta).grid(
-            row=0, column=0, padx=10, pady=(10, 4), sticky="ew"
+        self.seletor = ctk.CTkSegmentedButton(
+            barra, values=["Notas", "Tarefas"], command=self._mudar_modo
         )
-        ctk.CTkButton(barra, text="Nova nota", command=self._nova_nota).grid(
+        self.seletor.set("Notas")
+        self.seletor.grid(row=0, column=0, padx=10, pady=(10, 4), sticky="ew")
+
+        ctk.CTkButton(barra, text="Escolher pasta…", command=self._escolher_pasta).grid(
             row=1, column=0, padx=10, pady=4, sticky="ew"
         )
+        self.botao_nova = ctk.CTkButton(barra, text="Nova nota", command=self._nova_nota)
+        self.botao_nova.grid(row=2, column=0, padx=10, pady=4, sticky="ew")
         self.lista_notas = ctk.CTkScrollableFrame(barra, label_text="Notas")
-        self.lista_notas.grid(row=2, column=0, padx=10, pady=(4, 10), sticky="nsew")
+        self.lista_notas.grid(row=3, column=0, padx=10, pady=(4, 10), sticky="nsew")
 
     def _criar_editor(self) -> None:
         painel = ctk.CTkFrame(self, fg_color="transparent")
         painel.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
+        self.painel_editor = painel
         painel.grid_rowconfigure(1, weight=1)
         painel.grid_columnconfigure(0, weight=1)
 
@@ -105,6 +115,7 @@ class Aplicacao(ctk.CTk):
     def _criar_painel_tarefas(self) -> None:
         painel = ctk.CTkFrame(self, width=LARGURA_TAREFAS)
         painel.grid(row=0, column=2, sticky="nsew", padx=(0, 10), pady=10)
+        self.painel_tarefas = painel
         painel.grid_rowconfigure(1, weight=1)
         painel.grid_columnconfigure(0, weight=1)
 
@@ -332,6 +343,7 @@ class Aplicacao(ctk.CTk):
         self.pasta_raiz = Path(escolhida)
         configuracao.definir_pasta_notas(self.pasta_raiz)
         self._fechar_nota()
+        self._atualizar_todos()
 
     def _nova_nota(self) -> None:
         if self.pasta_raiz is None:
@@ -351,6 +363,171 @@ class Aplicacao(ctk.CTk):
             messagebox.showerror("Nova nota", str(erro), parent=self)
             return
         self._abrir_nota(caminho)
+
+    # ------------------------------------------------------------------
+    # Vista de tarefas (todas as notas)
+    # ------------------------------------------------------------------
+
+    def _criar_painel_todos(self) -> None:
+        painel = ctk.CTkFrame(self, fg_color="transparent")
+        painel.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=10, pady=10)
+        self.painel_todos = painel
+        painel.grid_rowconfigure(2, weight=1)
+        painel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            painel,
+            text="Tarefas de todas as notas",
+            anchor="w",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        filtros = ctk.CTkFrame(painel, fg_color="transparent")
+        filtros.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        filtros.grid_columnconfigure(2, weight=1)
+
+        self.filtro_estado = ctk.CTkSegmentedButton(
+            filtros,
+            values=list(agregado.ESTADOS),
+            command=lambda _v: self._atualizar_todos(),
+        )
+        self.filtro_estado.set("Por fazer")
+        self.filtro_estado.grid(row=0, column=0, padx=(0, 8))
+
+        self.filtro_pasta = ctk.CTkOptionMenu(
+            filtros,
+            values=[TODAS_PASTAS],
+            width=170,
+            command=lambda _v: self._atualizar_todos(),
+        )
+        self.filtro_pasta.set(TODAS_PASTAS)
+        self.filtro_pasta.grid(row=0, column=1, padx=(0, 8))
+
+        self.filtro_pesquisa = ctk.CTkEntry(filtros, placeholder_text="Pesquisar texto ou nota…")
+        self.filtro_pesquisa.grid(row=0, column=2, sticky="ew")
+        self.filtro_pesquisa.bind("<KeyRelease>", lambda _e: self._atualizar_todos())
+
+        self.lista_todos = ctk.CTkScrollableFrame(painel)
+        self.lista_todos.grid(row=2, column=0, sticky="nsew")
+
+        self.contador = ctk.CTkLabel(painel, text="", anchor="w", text_color="gray")
+        self.contador.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+
+        painel.grid_remove()  # só aparece quando o modo "Tarefas" está ativo
+
+    def _mudar_modo(self, valor: str) -> None:
+        self._modo = valor
+        self.seletor.set(valor)
+        if valor == "Tarefas":
+            self.painel_editor.grid_remove()
+            self.painel_tarefas.grid_remove()
+            self.botao_nova.grid_remove()
+            self.lista_notas.grid_remove()
+            self.painel_todos.grid()
+            self._atualizar_todos()
+        else:
+            self.painel_todos.grid_remove()
+            self.painel_editor.grid()
+            self.painel_tarefas.grid()
+            self.botao_nova.grid()
+            self.lista_notas.grid()
+
+    def _pasta_filtro(self) -> str | None:
+        valor = self.filtro_pasta.get()
+        if valor == TODAS_PASTAS:
+            return None
+        if valor == RAIZ:
+            return ""
+        return valor
+
+    def _atualizar_todos(self) -> None:
+        """Recalcula a lista de tarefas de todas as notas. Só faz trabalho no modo "Tarefas"."""
+        if self._modo != "Tarefas":
+            return
+        for widget in self.lista_todos.winfo_children():
+            widget.destroy()
+
+        if self.pasta_raiz is None:
+            self._texto_vazio(self.lista_todos, "Escolha primeiro a pasta das notas.")
+            self.contador.configure(text="")
+            return
+
+        # A nota aberta usa o texto do editor, para incluir alterações por guardar.
+        sobrepor = {self.caminho_atual: self._texto_editor()} if self.caminho_atual else {}
+        todas = agregado.recolher(self.pasta_raiz, sobrepor)
+
+        opcoes = [TODAS_PASTAS, RAIZ] + agregado.pastas_disponiveis(todas)
+        self.filtro_pasta.configure(values=opcoes)
+        if self.filtro_pasta.get() not in opcoes:
+            self.filtro_pasta.set(TODAS_PASTAS)
+
+        filtradas = agregado.filtrar(
+            todas,
+            estado=self.filtro_estado.get(),
+            pasta=self._pasta_filtro(),
+            pesquisa=self.filtro_pesquisa.get(),
+        )
+        self.contador.configure(text=f"{len(filtradas)} de {len(todas)} tarefas")
+
+        if not todas:
+            self._texto_vazio(
+                self.lista_todos,
+                "Nenhuma nota tem tarefas.\nEscreva linhas no formato:\n- [ ] texto",
+            )
+        elif not filtradas:
+            self._texto_vazio(self.lista_todos, "Nenhuma tarefa corresponde aos filtros.")
+        for item in filtradas:
+            self._linha_todo(item)
+
+    def _linha_todo(self, item: agregado.TarefaDeNota) -> None:
+        linha = ctk.CTkFrame(self.lista_todos, fg_color="transparent")
+        linha.pack(fill="x", pady=2)
+
+        caixa = ctk.CTkCheckBox(
+            linha,
+            text=item.tarefa.texto,
+            command=lambda i=item: self.after_idle(self._alternar_tarefa_de, i.caminho, i.tarefa.linha),
+        )
+        if item.tarefa.concluida:
+            caixa.select()
+        caixa.pack(side="left", fill="x", expand=True, padx=(4, 8))
+
+        destino = item.nota + (f"  ·  {item.pasta}" if item.pasta else "")
+        ctk.CTkButton(
+            linha,
+            text=destino,
+            width=160,
+            anchor="e",
+            fg_color="transparent",
+            text_color="gray",
+            hover_color=("gray75", "gray30"),
+            command=lambda i=item: self._abrir_a_partir_de_todos(i.caminho, i.tarefa.linha),
+        ).pack(side="right")
+
+    def _alternar_tarefa_de(self, caminho: Path, linha: int) -> None:
+        """Conclui ou reabre uma tarefa de qualquer nota, a partir da vista de tarefas."""
+        if caminho == self.caminho_atual:
+            self._alternar_tarefa(linha)
+        else:
+            try:
+                bruto = notas.ler_nota(caminho)
+                eol = "\r\n" if "\r\n" in bruto else "\n"
+                novo = alternar_tarefa(bruto.replace("\r\n", "\n"), linha)
+                notas.gravar_nota(caminho, novo.replace("\n", eol) if eol == "\r\n" else novo)
+            except (OSError, ValueError, IndexError) as erro:
+                messagebox.showerror("Erro ao gravar", str(erro), parent=self)
+        self._atualizar_todos()
+
+    def _abrir_a_partir_de_todos(self, caminho: Path, linha: int) -> None:
+        """Abre a nota no modo "Notas" e posiciona o cursor na linha da tarefa."""
+        self._mudar_modo("Notas")
+        if caminho != self.caminho_atual:
+            self._abrir_nota(caminho)
+            if caminho != self.caminho_atual:  # o utilizador cancelou
+                return
+        tk_texto = self.editor._textbox
+        tk_texto.mark_set("insert", f"{linha + 1}.0")
+        tk_texto.see("insert")
 
 
 def iniciar() -> None:

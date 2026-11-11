@@ -28,6 +28,20 @@ A escolha fica guardada em `%USERPROFILE%\.notas_tarefas.json`.
   fechar a app ou trocar de nota com alterações pendentes, a app pergunta.
 - A coluna da direita lista as tarefas da nota aberta.
 
+### Vista de tarefas
+
+No seletor **Notas / Tarefas**, no topo da coluna da esquerda, a vista
+**Tarefas** junta as tarefas de todas as notas numa só lista.
+
+- **Estado**: Todas, Por fazer ou Concluídas.
+- **Pasta**: todas as pastas, só a raiz, ou uma pasta específica.
+- **Pesquisa**: procura no texto da tarefa e no nome da nota.
+
+Os filtros combinam-se entre si. Marcar uma tarefa nesta vista grava a nota
+de origem. Clicar no nome da nota abre a nota no sítio da tarefa.
+
+Os filtros por Tema, Prioridade e Dra. Elvira dependem do Airtable e ainda não existem.
+
 ### Tarefas
 
 Uma tarefa é uma linha no formato:
