@@ -12,7 +12,7 @@ from tkinter import TclError, filedialog, messagebox
 import customtkinter as ctk
 
 from . import agregado, configuracao, formatacao, notas
-from .tarefas import Tarefa, alternar_tarefa, extrair_tarefas
+from .tarefas import Tarefa, acrescentar_tarefa, alternar_tarefa, extrair_tarefas
 
 LARGURA_NOTAS = 260
 LARGURA_TAREFAS = 300
@@ -147,11 +147,38 @@ class Aplicacao(ctk.CTk):
         ).grid(row=0, column=0, padx=10, pady=(10, 4), sticky="ew")
 
         self.lista_tarefas = ctk.CTkScrollableFrame(painel)
-        self.lista_tarefas.grid(row=1, column=0, padx=6, pady=(0, 10), sticky="nsew")
+        self.lista_tarefas.grid(row=1, column=0, padx=6, pady=(0, 6), sticky="nsew")
+
+        adicionar = ctk.CTkFrame(painel, fg_color="transparent")
+        adicionar.grid(row=2, column=0, padx=6, pady=(0, 10), sticky="ew")
+        adicionar.grid_columnconfigure(0, weight=1)
+        self.entrada_tarefa = ctk.CTkEntry(adicionar, placeholder_text="Nova tarefa…")
+        self.entrada_tarefa.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.entrada_tarefa.bind("<Return>", lambda _e: self._adicionar_tarefa())
+        ctk.CTkButton(adicionar, text="Adicionar", width=90, command=self._adicionar_tarefa).grid(
+            row=0, column=1
+        )
 
     # ------------------------------------------------------------------
     # Acesso ao editor
     # ------------------------------------------------------------------
+
+    def _adicionar_tarefa(self) -> None:
+        """Acrescenta uma tarefa aberta no fim da nota e grava a nota."""
+        if self.caminho_atual is None:
+            messagebox.showinfo("Nova tarefa", "Abra uma nota primeiro.", parent=self)
+            return
+        descricao = self.entrada_tarefa.get().strip()
+        if not descricao:
+            return
+        try:
+            novo_texto = acrescentar_tarefa(self._texto_editor(), descricao)
+        except ValueError as erro:
+            messagebox.showerror("Nova tarefa", str(erro), parent=self)
+            return
+        self.entrada_tarefa.delete(0, "end")
+        self._mostrar_texto(novo_texto)
+        self._gravar_texto(novo_texto)
 
     def _texto_editor(self) -> str:
         return self.editor.get("1.0", "end-1c")

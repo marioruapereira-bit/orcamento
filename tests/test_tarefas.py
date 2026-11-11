@@ -1,6 +1,6 @@
 import unittest
 
-from notas_tarefas.tarefas import Tarefa, alternar_tarefa, extrair_tarefas
+from notas_tarefas.tarefas import Tarefa, acrescentar_tarefa, alternar_tarefa, extrair_tarefas
 
 
 class ExtrairTarefas(unittest.TestCase):
@@ -71,6 +71,33 @@ class AlternarTarefa(unittest.TestCase):
     def test_linha_que_nao_e_tarefa(self):
         with self.assertRaises(ValueError):
             alternar_tarefa("texto\n- [ ] A", 0)
+
+
+
+class AcrescentarTarefa(unittest.TestCase):
+    def test_nota_vazia(self):
+        self.assertEqual(acrescentar_tarefa("", "Pagar renda"), "- [ ] Pagar renda")
+
+    def test_acrescenta_em_nova_linha(self):
+        self.assertEqual(acrescentar_tarefa("# Nota", "Pagar renda"), "# Nota\n- [ ] Pagar renda")
+
+    def test_nota_que_ja_termina_em_quebra(self):
+        self.assertEqual(acrescentar_tarefa("# Nota\n", "Pagar renda"), "# Nota\n- [ ] Pagar renda")
+
+    def test_a_tarefa_nova_aparece_como_aberta(self):
+        novo = acrescentar_tarefa("- [x] feita", "nova")
+        tarefas = extrair_tarefas(novo)
+        self.assertEqual([(t.texto, t.concluida) for t in tarefas], [("feita", True), ("nova", False)])
+
+    def test_nao_altera_o_resto_do_texto(self):
+        original = "Título\n\n- [x] feita\nparágrafo"
+        self.assertTrue(acrescentar_tarefa(original, "x").startswith(original + "\n"))
+
+    def test_descricao_invalida(self):
+        for descricao in ["", "   ", "linha 1\nlinha 2"]:
+            with self.subTest(descricao=descricao):
+                with self.assertRaises(ValueError):
+                    acrescentar_tarefa("", descricao)
 
 
 if __name__ == "__main__":

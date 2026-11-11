@@ -72,3 +72,18 @@ def alternar_tarefa(texto: str, linha: int) -> str:
     inicio, fim = m.start(2), m.end(2)
     linhas[linha] = original[:inicio] + novo_estado + original[fim:]
     return "\n".join(linhas)
+
+
+def acrescentar_tarefa(texto: str, descricao: str) -> str:
+    """Acrescenta uma tarefa aberta no fim do texto: ``- [ ] descricao``.
+
+    Levanta ``ValueError`` se a descrição estiver vazia ou tiver mais do que uma linha.
+    """
+    descricao = descricao.strip()
+    if not descricao or "\n" in descricao or "\r" in descricao:
+        raise ValueError("A tarefa tem de ter texto e ocupar uma só linha.")
+    linha = f"- [ ] {descricao}"
+    if not texto:
+        return linha
+    separador = "" if texto.endswith("\n") else "\n"
+    return texto + separador + linha

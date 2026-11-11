@@ -58,8 +58,6 @@ No seletor **Notas / Tarefas**, no topo da coluna da esquerda, a vista
 Os filtros combinam-se entre si. Marcar uma tarefa nesta vista grava a nota
 de origem. Clicar no nome da nota abre a nota no sítio da tarefa.
 
-Os filtros por Tema, Prioridade e Dra. Elvira dependem do Airtable e ainda não existem.
-
 ### Tarefas
 
 Uma tarefa é uma linha no formato:
@@ -86,5 +84,5 @@ python -m unittest
 
 ## Fora desta versão
 
-Integração com Airtable, extração de tarefas por IA (API Google Gemini),
-filtros, notas privadas (`privada: true`), lembretes e sincronização.
+Extração de tarefas por IA, notas privadas (`privada: true`), lembretes e
+sincronização. A app funciona só com ficheiros locais.

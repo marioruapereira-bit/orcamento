@@ -1,7 +1,6 @@
 """Tarefas de todas as notas numa só lista, com filtros.
 
-Estes filtros funcionam só com dados locais. Os filtros por Tema, Prioridade
-e Dra. Elvira dependem do Airtable e ficam para essa fase.
+Os filtros funcionam só com os dados das notas locais.
 """
 
 from __future__ import annotations
