@@ -46,6 +46,30 @@ não aparecem, só o texto.
 A formatação funciona dentro de uma linha. Se selecionar mais do que uma linha, a
 app avisa.
 
+### Assistente (Gemini)
+
+No seletor **Notas / Tarefas / Assistente**, escreva o rascunho na caixa da esquerda e
+clique em **Estruturar com Gemini**. A proposta aparece à direita, para corrigir
+antes de guardar. Nada entra numa nota sem clicar em **Guardar proposta como nota**.
+
+Para usar, defina a chave antes de abrir a app (no PowerShell):
+
+```powershell
+setx GOOGLE_API_KEY "a-sua-chave"
+```
+
+O modelo predefinido é `gemini-2.5-flash`. Para escolher outro, defina `GEMINI_MODELO`.
+
+**Quando o Gemini falha**: se não houver ligação, se a chave estiver em falta ou se a API
+responder com erro, o texto escrito é guardado sozinho como nota nova, sem estruturação.
+A app diz o nome da nota criada. Nada se perde.
+
+**Privacidade**: o texto das notas é enviado ao Google. Notas com `privada: true` no
+cabeçalho nunca são enviadas; nesse caso o texto é guardado sem estruturação.
+
+No nível gratuito da API, o Google pode usar os pedidos para melhorar os produtos, e
+pessoas podem revê-los. No nível pago, com faturação ativa, isso não acontece.
+
 ### Vista de tarefas
 
 No seletor **Notas / Tarefas**, no topo da coluna da esquerda, a vista
@@ -84,5 +108,4 @@ python -m unittest
 
 ## Fora desta versão
 
-Extração de tarefas por IA, notas privadas (`privada: true`), lembretes e
-sincronização. A app funciona só com ficheiros locais.
+Lembretes e sincronização. As notas são ficheiros locais; só o Assistente usa a rede.

@@ -6,12 +6,15 @@ Este módulo só liga a interface a essas funções.
 
 from __future__ import annotations
 
+import queue
+import threading
+from datetime import datetime
 from pathlib import Path
 from tkinter import TclError, filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import agregado, configuracao, formatacao, notas
+from . import agregado, configuracao, formatacao, ia, notas
 from .tarefas import Tarefa, acrescentar_tarefa, alternar_tarefa, extrair_tarefas
 
 LARGURA_NOTAS = 260
@@ -43,6 +46,7 @@ class Aplicacao(ctk.CTk):
         self._criar_editor()
         self._criar_painel_tarefas()
         self._criar_painel_todos()
+        self._criar_painel_assistente()
 
         self.bind("<Control-s>", lambda _e: self._guardar())
         self.bind("<Control-b>", lambda _e: self._aplicar_formato("negrito"))
@@ -64,7 +68,7 @@ class Aplicacao(ctk.CTk):
         barra.grid_columnconfigure(0, weight=1)
 
         self.seletor = ctk.CTkSegmentedButton(
-            barra, values=["Notas", "Tarefas"], command=self._mudar_modo
+            barra, values=["Notas", "Tarefas", "Assistente"], command=self._mudar_modo
         )
         self.seletor.set("Notas")
         self.seletor.grid(row=0, column=0, padx=10, pady=(10, 4), sticky="ew")
@@ -503,22 +507,192 @@ class Aplicacao(ctk.CTk):
 
         painel.grid_remove()  # só aparece quando o modo "Tarefas" está ativo
 
+    @staticmethod
+    def _mostrar(widget, visivel: bool) -> None:
+        if visivel:
+            widget.grid()
+        else:
+            widget.grid_remove()
+
     def _mudar_modo(self, valor: str) -> None:
         self._modo = valor
         self.seletor.set(valor)
+        self._mostrar(self.painel_editor, valor == "Notas")
+        self._mostrar(self.painel_tarefas, valor == "Notas")
+        self._mostrar(self.botao_nova, valor == "Notas")
+        self._mostrar(self.lista_notas, valor == "Notas")
+        self._mostrar(self.painel_todos, valor == "Tarefas")
+        self._mostrar(self.painel_assistente, valor == "Assistente")
         if valor == "Tarefas":
-            self.painel_editor.grid_remove()
-            self.painel_tarefas.grid_remove()
-            self.botao_nova.grid_remove()
-            self.lista_notas.grid_remove()
-            self.painel_todos.grid()
             self._atualizar_todos()
-        else:
-            self.painel_todos.grid_remove()
-            self.painel_editor.grid()
-            self.painel_tarefas.grid()
-            self.botao_nova.grid()
-            self.lista_notas.grid()
+
+    # ------------------------------------------------------------------
+    # Assistente (Gemini)
+    # ------------------------------------------------------------------
+
+    def _criar_painel_assistente(self) -> None:
+        painel = ctk.CTkFrame(self, fg_color="transparent")
+        painel.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=10, pady=10)
+        self.painel_assistente = painel
+        painel.grid_columnconfigure(0, weight=1)
+        painel.grid_columnconfigure(1, weight=1)
+        painel.grid_rowconfigure(3, weight=1)
+
+        ctk.CTkLabel(
+            painel, text="Assistente", anchor="w", font=ctk.CTkFont(size=16, weight="bold")
+        ).grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+
+        topo = ctk.CTkFrame(painel, fg_color="transparent")
+        topo.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        topo.grid_columnconfigure(0, weight=1)
+        self.entrada_nome = ctk.CTkEntry(topo, placeholder_text="Nome da nota (opcional)")
+        self.entrada_nome.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self.botao_estruturar = ctk.CTkButton(
+            topo, text="Estruturar com Gemini", command=self._estruturar_rascunho
+        )
+        self.botao_estruturar.grid(row=0, column=1, padx=(0, 8))
+        ctk.CTkButton(topo, text="Guardar sem IA", command=self._guardar_rascunho_sem_ia).grid(
+            row=0, column=2
+        )
+
+        ctk.CTkLabel(painel, text="Rascunho", anchor="w", text_color="gray").grid(
+            row=2, column=0, sticky="ew"
+        )
+        ctk.CTkLabel(
+            painel,
+            text="Proposta estruturada (pode corrigir antes de guardar)",
+            anchor="w",
+            text_color="gray",
+        ).grid(row=2, column=1, sticky="ew")
+
+        self.rascunho = ctk.CTkTextbox(painel, wrap="word", font=ctk.CTkFont(family="Consolas", size=14))
+        self.rascunho.grid(row=3, column=0, sticky="nsew", padx=(0, 6))
+        self.previa = ctk.CTkTextbox(painel, wrap="word", font=ctk.CTkFont(family="Consolas", size=14))
+        self.previa.grid(row=3, column=1, sticky="nsew", padx=(6, 0))
+
+        rodape = ctk.CTkFrame(painel, fg_color="transparent")
+        rodape.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        rodape.grid_columnconfigure(0, weight=1)
+        self.estado_assistente = ctk.CTkLabel(
+            rodape, text="", anchor="w", justify="left", text_color="gray", wraplength=640
+        )
+        self.estado_assistente.grid(row=0, column=0, sticky="ew")
+        self.botao_guardar_previa = ctk.CTkButton(
+            rodape, text="Guardar proposta como nota", state="disabled", command=self._guardar_previa
+        )
+        self.botao_guardar_previa.grid(row=0, column=1)
+
+        painel.grid_remove()
+
+    def _definir_estado_assistente(self, mensagem: str) -> None:
+        self.estado_assistente.configure(text=mensagem)
+
+    def _criar_nota_automatica(self, texto: str) -> Path | None:
+        """Cria uma nota nova com o texto. Se o nome já existir ou for inválido, usa outro."""
+        if self.pasta_raiz is None:
+            messagebox.showinfo("Assistente", "Escolha primeiro a pasta das notas.", parent=self)
+            return None
+        agora = datetime.now().strftime("Rascunho %Y-%m-%d %H%M")
+        base = self.entrada_nome.get().strip() or agora
+        nome, n = base, 1
+        while True:
+            try:
+                caminho = notas.criar_nota(self.pasta_raiz, nome)
+                break
+            except ValueError:
+                base = nome = agora
+                n = 1
+            except FileExistsError:
+                n += 1
+                nome = f"{base} ({n})"
+            except OSError as erro:
+                messagebox.showerror("Assistente", str(erro), parent=self)
+                return None
+        try:
+            notas.gravar_nota(caminho, texto)
+        except OSError as erro:
+            messagebox.showerror("Assistente", str(erro), parent=self)
+            return None
+        self._atualizar_arvore()
+        return caminho
+
+    def _limpar_assistente(self) -> None:
+        self.rascunho.delete("1.0", "end")
+        self.previa.delete("1.0", "end")
+        self.entrada_nome.delete(0, "end")
+        self.botao_guardar_previa.configure(state="disabled")
+
+    def _estruturar_rascunho(self) -> None:
+        texto = self.rascunho.get("1.0", "end-1c")
+        if not texto.strip():
+            self._definir_estado_assistente("Escreva algo no rascunho primeiro.")
+            return
+        if self.pasta_raiz is None:
+            messagebox.showinfo("Assistente", "Escolha primeiro a pasta das notas.", parent=self)
+            return
+
+        self.botao_estruturar.configure(state="disabled")
+        self._definir_estado_assistente("A estruturar com o Gemini…")
+        fila: queue.Queue = queue.Queue()
+        self._fila_ia = fila
+
+        def trabalhar() -> None:
+            try:
+                resultado = ia.estruturar_com_recurso(texto)
+            except Exception as erro:  # nunca deixar a janela presa
+                resultado = ia.Resultado(texto, False, f"Erro inesperado: {erro}")
+            fila.put(resultado)
+
+        threading.Thread(target=trabalhar, daemon=True).start()
+        self.after(150, self._verificar_resultado_ia)
+
+    def _verificar_resultado_ia(self) -> None:
+        try:
+            resultado = self._fila_ia.get_nowait()
+        except queue.Empty:
+            self.after(150, self._verificar_resultado_ia)
+            return
+
+        self.botao_estruturar.configure(state="normal")
+        if resultado.estruturado:
+            self._mostrar_previa(resultado.texto)
+            self._definir_estado_assistente("Proposta pronta. Corrija se precisar e guarde.")
+            return
+
+        # O Gemini falhou (ou a nota é privada): o texto original vai para uma nota nova.
+        caminho = self._criar_nota_automatica(resultado.texto)
+        if caminho is None:
+            return
+        self._definir_estado_assistente(
+            f"{resultado.motivo} Nota criada sem estruturação: {caminho.name}"
+        )
+        self._limpar_assistente()
+
+    def _mostrar_previa(self, texto: str) -> None:
+        self.previa.delete("1.0", "end")
+        self.previa.insert("1.0", texto)
+        self.botao_guardar_previa.configure(state="normal")
+
+    def _guardar_previa(self) -> None:
+        texto = self.previa.get("1.0", "end-1c")
+        if not texto.strip():
+            return
+        caminho = self._criar_nota_automatica(texto)
+        if caminho is None:
+            return
+        self._definir_estado_assistente(f"Nota criada: {caminho.name}")
+        self._limpar_assistente()
+
+    def _guardar_rascunho_sem_ia(self) -> None:
+        texto = self.rascunho.get("1.0", "end-1c")
+        if not texto.strip():
+            self._definir_estado_assistente("Escreva algo no rascunho primeiro.")
+            return
+        caminho = self._criar_nota_automatica(texto)
+        if caminho is None:
+            return
+        self._definir_estado_assistente(f"Nota criada sem IA: {caminho.name}")
+        self._limpar_assistente()
 
     def _pasta_filtro(self) -> str | None:
         valor = self.filtro_pasta.get()
