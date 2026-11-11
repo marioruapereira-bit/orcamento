@@ -46,37 +46,6 @@ não aparecem, só o texto.
 A formatação funciona dentro de uma linha. Se selecionar mais do que uma linha, a
 app avisa.
 
-### Airtable
-
-A vista **Airtable** lê a tabela Tarefas da base de tarefas e mostra as tarefas
-com os filtros Tema, Prioridade e "Só as que aguardam a Dra. Elvira". Os botões
-**Concluir** e **Reabrir** mudam o Status do registo para "Concluída" ou "Por Fazer".
-
-Para funcionar, defina o token antes de abrir a app (no PowerShell):
-
-```powershell
-setx AIRTABLE_TOKEN "pat..."
-```
-
-Depois reabra a app. Sem o token, a vista mostra uma mensagem a pedi-lo.
-
-**Ligação entre uma tarefa da nota e um registo.** Uma tarefa com âncora
-(`- [ ] texto ^a1b2`) fica ligada ao registo cujo campo Observações começa por
-`ancora:a1b2; ` seguido do caminho relativo da nota, por exemplo:
-
-```
-ancora:a1b2; Trabalho/Reunião.md
-```
-
-Quando marca essa tarefa como concluída na nota, o Status do registo muda também.
-Se a âncora não existir no Airtable, ou se o Airtable falhar, a nota fica atualizada
-e a app avisa.
-
-Por agora, a app não cria registos nem gera âncoras. Isso fica para a fase de
-extração por IA. Até lá, a ligação só existe se o campo Observações tiver o texto acima.
-
-As chamadas ao Airtable são feitas na própria janela e podem demorar um pouco.
-
 ### Vista de tarefas
 
 No seletor **Notas / Tarefas**, no topo da coluna da esquerda, a vista
