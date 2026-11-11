@@ -11,13 +11,21 @@ from tkinter import TclError, filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import agregado, configuracao, formatacao, notas
+from . import agregado, airtable, configuracao, formatacao, notas
 from .tarefas import Tarefa, alternar_tarefa, extrair_tarefas
 
 LARGURA_NOTAS = 260
 LARGURA_TAREFAS = 300
 TODAS_PASTAS = "Todas as pastas"
 RAIZ = "(raiz)"
+
+
+TODOS_TEMAS = "Todos os temas"
+TODAS_PRIORIDADES = "Todas as prioridades"
+
+
+def _tarefa_na_linha(texto: str, linha: int) -> Tarefa | None:
+    return next((t for t in extrair_tarefas(texto) if t.linha == linha), None)
 
 
 class Aplicacao(ctk.CTk):
@@ -43,6 +51,7 @@ class Aplicacao(ctk.CTk):
         self._criar_editor()
         self._criar_painel_tarefas()
         self._criar_painel_todos()
+        self._criar_painel_airtable()
 
         self.bind("<Control-s>", lambda _e: self._guardar())
         self.bind("<Control-b>", lambda _e: self._aplicar_formato("negrito"))
@@ -64,7 +73,7 @@ class Aplicacao(ctk.CTk):
         barra.grid_columnconfigure(0, weight=1)
 
         self.seletor = ctk.CTkSegmentedButton(
-            barra, values=["Notas", "Tarefas"], command=self._mudar_modo
+            barra, values=["Notas", "Tarefas", "Airtable"], command=self._mudar_modo
         )
         self.seletor.set("Notas")
         self.seletor.grid(row=0, column=0, padx=10, pady=(10, 4), sticky="ew")
@@ -277,13 +286,16 @@ class Aplicacao(ctk.CTk):
         """
         if self.caminho_atual is None:
             return
+        texto_antes = self._texto_editor()
         try:
-            novo_texto = alternar_tarefa(self._texto_editor(), linha)
+            novo_texto = alternar_tarefa(texto_antes, linha)
         except (IndexError, ValueError):
             self._atualizar_estado()
             return
+        tarefa = _tarefa_na_linha(texto_antes, linha)
         self._mostrar_texto(novo_texto, manter_cursor=True)
-        self._gravar_texto(novo_texto)
+        if self._gravar_texto(novo_texto) and tarefa and tarefa.ancora:
+            self._sincronizar_airtable(tarefa.ancora, not tarefa.concluida)
 
     # ------------------------------------------------------------------
     # Abrir, guardar e fechar
@@ -479,15 +491,22 @@ class Aplicacao(ctk.CTk):
     def _mudar_modo(self, valor: str) -> None:
         self._modo = valor
         self.seletor.set(valor)
-        if valor == "Tarefas":
+        if valor != "Notas":
             self.painel_editor.grid_remove()
             self.painel_tarefas.grid_remove()
             self.botao_nova.grid_remove()
             self.lista_notas.grid_remove()
-            self.painel_todos.grid()
-            self._atualizar_todos()
+            if valor == "Tarefas":
+                self.painel_todos.grid()
+                self.painel_airtable.grid_remove()
+                self._atualizar_todos()
+            else:
+                self.painel_todos.grid_remove()
+                self.painel_airtable.grid()
+                self._atualizar_airtable()
         else:
             self.painel_todos.grid_remove()
+            self.painel_airtable.grid_remove()
             self.painel_editor.grid()
             self.painel_tarefas.grid()
             self.botao_nova.grid()
@@ -573,10 +592,15 @@ class Aplicacao(ctk.CTk):
             try:
                 bruto = notas.ler_nota(caminho)
                 eol = "\r\n" if "\r\n" in bruto else "\n"
-                novo = alternar_tarefa(bruto.replace("\r\n", "\n"), linha)
+                texto = bruto.replace("\r\n", "\n")
+                novo = alternar_tarefa(texto, linha)
                 notas.gravar_nota(caminho, novo.replace("\n", eol) if eol == "\r\n" else novo)
             except (OSError, ValueError, IndexError) as erro:
                 messagebox.showerror("Erro ao gravar", str(erro), parent=self)
+            else:
+                tarefa = _tarefa_na_linha(texto, linha)
+                if tarefa and tarefa.ancora:
+                    self._sincronizar_airtable(tarefa.ancora, not tarefa.concluida)
         self._atualizar_todos()
 
     def _abrir_a_partir_de_todos(self, caminho: Path, linha: int) -> None:
@@ -589,6 +613,151 @@ class Aplicacao(ctk.CTk):
         tk_texto = self.editor._textbox
         tk_texto.mark_set("insert", f"{linha + 1}.0")
         tk_texto.see("insert")
+
+    # ------------------------------------------------------------------
+    # Airtable
+    # ------------------------------------------------------------------
+
+    def _sincronizar_airtable(self, ancora: str, concluida: bool) -> None:
+        """Atualiza no Airtable o estado da tarefa ligada a esta âncora.
+
+        A nota já foi gravada. Se o Airtable falhar, a alteração local fica e
+        o utilizador é avisado.
+        """
+        try:
+            cliente = airtable.Cliente(airtable.token())
+            registo = cliente.encontrar_por_ancora(ancora)
+            if registo is None:
+                messagebox.showwarning(
+                    "Airtable",
+                    "A nota foi atualizada, mas não há nenhum registo no Airtable com esta âncora "
+                    f"(ancora:{ancora}) no campo Observações.",
+                    parent=self,
+                )
+                return
+            cliente.definir_estado(
+                registo.id, airtable.ESTADO_CONCLUIDA if concluida else airtable.ESTADO_POR_FAZER
+            )
+        except (airtable.ErroAirtable, ValueError) as erro:
+            messagebox.showwarning(
+                "Airtable",
+                f"A nota foi atualizada, mas o Airtable não. {erro}",
+                parent=self,
+            )
+
+    def _criar_painel_airtable(self) -> None:
+        painel = ctk.CTkFrame(self, fg_color="transparent")
+        painel.grid(row=0, column=1, columnspan=2, sticky="nsew", padx=10, pady=10)
+        self.painel_airtable = painel
+        painel.grid_rowconfigure(2, weight=1)
+        painel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            painel,
+            text="Tarefas no Airtable",
+            anchor="w",
+            font=ctk.CTkFont(size=16, weight="bold"),
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 8))
+
+        filtros = ctk.CTkFrame(painel, fg_color="transparent")
+        filtros.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        self.filtro_tema = ctk.CTkOptionMenu(
+            filtros,
+            values=[TODOS_TEMAS, *airtable.TEMAS],
+            width=180,
+            command=lambda _v: self._atualizar_airtable(),
+        )
+        self.filtro_tema.set(TODOS_TEMAS)
+        self.filtro_tema.grid(row=0, column=0, padx=(0, 8), pady=4)
+
+        self.filtro_prioridade = ctk.CTkOptionMenu(
+            filtros,
+            values=[TODAS_PRIORIDADES, *airtable.PRIORIDADES],
+            width=180,
+            command=lambda _v: self._atualizar_airtable(),
+        )
+        self.filtro_prioridade.set(TODAS_PRIORIDADES)
+        self.filtro_prioridade.grid(row=0, column=1, padx=(0, 8), pady=4)
+
+        self.filtro_elvira = ctk.CTkCheckBox(
+            filtros,
+            text="Só as que aguardam a Dra. Elvira",
+            command=self._atualizar_airtable,
+        )
+        self.filtro_elvira.grid(row=0, column=2, padx=(0, 8), pady=4)
+
+        ctk.CTkButton(filtros, text="Atualizar", width=100, command=self._atualizar_airtable).grid(
+            row=0, column=3, pady=4
+        )
+
+        self.lista_airtable = ctk.CTkScrollableFrame(painel)
+        self.lista_airtable.grid(row=2, column=0, sticky="nsew")
+
+        self.contador_airtable = ctk.CTkLabel(painel, text="", anchor="w", text_color="gray")
+        self.contador_airtable.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+
+        painel.grid_remove()
+
+    def _valor_opcao(self, menu: ctk.CTkOptionMenu, todos: str) -> str | None:
+        valor = menu.get()
+        return None if valor == todos else valor
+
+    def _atualizar_airtable(self) -> None:
+        """Lê do Airtable as tarefas que cumprem os filtros. Só faz trabalho no modo "Airtable"."""
+        if self._modo != "Airtable":
+            return
+        for widget in self.lista_airtable.winfo_children():
+            widget.destroy()
+
+        formula = airtable.formula_filtros(
+            tema=self._valor_opcao(self.filtro_tema, TODOS_TEMAS),
+            prioridade=self._valor_opcao(self.filtro_prioridade, TODAS_PRIORIDADES),
+            so_aguarda=bool(self.filtro_elvira.get()),
+        )
+        try:
+            registos = airtable.Cliente(airtable.token()).listar(formula)
+        except (airtable.ErroAirtable, OSError) as erro:
+            self._texto_vazio(self.lista_airtable, str(erro))
+            self.contador_airtable.configure(text="")
+            return
+
+        if not registos:
+            self._texto_vazio(self.lista_airtable, "Nenhuma tarefa corresponde aos filtros.")
+        for registo in registos:
+            self._linha_airtable(registo)
+        self.contador_airtable.configure(text=f"{len(registos)} tarefas")
+
+    def _linha_airtable(self, registo: airtable.Registo) -> None:
+        linha = ctk.CTkFrame(self.lista_airtable, fg_color="transparent")
+        linha.pack(fill="x", pady=2)
+
+        detalhes = [registo.estado, registo.prioridade, registo.tema]
+        if registo.limite:
+            detalhes.append(f"prazo {registo.limite}")
+        if registo.aguarda:
+            detalhes.append("aguarda a Dra. Elvira")
+        texto = registo.nome + "\n" + " · ".join(d for d in detalhes if d)
+
+        ctk.CTkLabel(linha, text=texto, anchor="w", justify="left").pack(
+            side="left", fill="x", expand=True, padx=6
+        )
+        concluida = registo.estado == airtable.ESTADO_CONCLUIDA
+        ctk.CTkButton(
+            linha,
+            text="Reabrir" if concluida else "Concluir",
+            width=100,
+            command=lambda r=registo, c=concluida: self.after_idle(self._mudar_estado_airtable, r, c),
+        ).pack(side="right", padx=6)
+
+    def _mudar_estado_airtable(self, registo: airtable.Registo, concluida_atual: bool) -> None:
+        novo = airtable.ESTADO_POR_FAZER if concluida_atual else airtable.ESTADO_CONCLUIDA
+        try:
+            airtable.Cliente(airtable.token()).definir_estado(registo.id, novo)
+        except (airtable.ErroAirtable, ValueError) as erro:
+            messagebox.showerror("Airtable", str(erro), parent=self)
+            return
+        self._atualizar_airtable()
 
 
 def iniciar() -> None:
