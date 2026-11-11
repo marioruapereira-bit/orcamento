@@ -46,6 +46,26 @@ não aparecem, só o texto.
 A formatação funciona dentro de uma linha. Se selecionar mais do que uma linha, a
 app avisa.
 
+### Opções das tarefas
+
+Cada tarefa pode ter três opções, guardadas na própria linha da nota:
+
+- **Dra. Elvira**: marca a tarefa como precisando de validação da Dra. Elvira (`#elvira`).
+- **Colega**: quem está responsável (`@Nome`). Espaços no nome são escritos como `_`.
+- **Área**: RH, Procurement ou Geral (`#rh`, `#procurement`, `#geral`). Sem marca, é Geral.
+
+Para editar, clique em **Opções** na lista de tarefas da nota. Os colegas ficam numa lista
+em `%USERPROFILE%\.notas_tarefas.json`, e pode acrescentar novos no próprio diálogo.
+
+Exemplo de linha:
+
+```markdown
+- [ ] Rever contrato #procurement @Ana_Silva #elvira
+```
+
+Na vista **Tarefas**, pode filtrar por área, por colega e pelas tarefas que precisam da
+Dra. Elvira. Estes filtros combinam-se com os restantes.
+
 ### Assistente (Gemini)
 
 No seletor **Notas / Tarefas / Assistente**, escreva o rascunho na caixa da esquerda e

@@ -10,17 +10,40 @@ import queue
 import threading
 from datetime import datetime
 from pathlib import Path
-from tkinter import TclError, filedialog, messagebox
+from tkinter import BooleanVar, TclError, filedialog, messagebox
 
 import customtkinter as ctk
 
 from . import agregado, configuracao, formatacao, ia, notas
-from .tarefas import Tarefa, acrescentar_tarefa, alternar_tarefa, extrair_tarefas
+from .tarefas import (
+    AREAS,
+    Tarefa,
+    acrescentar_tarefa,
+    alternar_tarefa,
+    definir_opcoes,
+    extrair_tarefas,
+)
 
 LARGURA_NOTAS = 260
 LARGURA_TAREFAS = 300
 TODAS_PASTAS = "Todas as pastas"
+TODAS_AREAS = "Todas as áreas"
+TODOS_COLEGAS = "Todos os colegas"
+SEM_COLEGA = "Sem colega"
 RAIZ = "(raiz)"
+
+
+def _tarefa_na_linha(texto: str, linha: int) -> Tarefa | None:
+    return next((t for t in extrair_tarefas(texto) if t.linha == linha), None)
+
+
+def _resumo_opcoes(tarefa: Tarefa) -> str:
+    partes = [tarefa.area]
+    if tarefa.colega:
+        partes.append(tarefa.colega)
+    if tarefa.elvira:
+        partes.append("Dra. Elvira")
+    return " · ".join(partes)
 
 
 class Aplicacao(ctk.CTk):
@@ -285,14 +308,26 @@ class Aplicacao(ctk.CTk):
             return
 
         for tarefa in tarefas:
+            bloco = ctk.CTkFrame(self.lista_tarefas, fg_color="transparent")
+            bloco.pack(fill="x", padx=2, pady=2)
             caixa = ctk.CTkCheckBox(
-                self.lista_tarefas,
+                bloco,
                 text=formatacao.sem_marcas(tarefa.texto),
                 command=lambda i=tarefa.linha: self.after_idle(self._alternar_tarefa, i),
             )
             if tarefa.concluida:
                 caixa.select()
-            caixa.pack(anchor="w", padx=6, pady=4, fill="x")
+            caixa.pack(anchor="w", padx=4, pady=(2, 0), fill="x")
+            opcoes = ctk.CTkFrame(bloco, fg_color="transparent")
+            opcoes.pack(fill="x", padx=(28, 4))
+            ctk.CTkLabel(
+                opcoes, text=_resumo_opcoes(tarefa), text_color="gray",
+                font=ctk.CTkFont(size=11), anchor="w",
+            ).pack(side="left")
+            ctk.CTkButton(
+                opcoes, text="Opções", width=70, height=22,
+                command=lambda i=tarefa.linha: self.after_idle(self._editar_opcoes, i),
+            ).pack(side="right")
 
     @staticmethod
     def _texto_vazio(pai, texto: str) -> None:
@@ -499,6 +534,31 @@ class Aplicacao(ctk.CTk):
         self.filtro_pesquisa.grid(row=0, column=2, sticky="ew")
         self.filtro_pesquisa.bind("<KeyRelease>", lambda _e: self._atualizar_todos())
 
+        self.filtro_area = ctk.CTkOptionMenu(
+            filtros,
+            values=[TODAS_AREAS, *AREAS],
+            width=170,
+            command=lambda _v: self._atualizar_todos(),
+        )
+        self.filtro_area.set(TODAS_AREAS)
+        self.filtro_area.grid(row=1, column=0, padx=(0, 8), pady=(8, 0), sticky="w")
+
+        self.filtro_colega = ctk.CTkOptionMenu(
+            filtros,
+            values=[TODOS_COLEGAS],
+            width=170,
+            command=lambda _v: self._atualizar_todos(),
+        )
+        self.filtro_colega.set(TODOS_COLEGAS)
+        self.filtro_colega.grid(row=1, column=1, padx=(0, 8), pady=(8, 0), sticky="w")
+
+        self.filtro_elvira = ctk.CTkCheckBox(
+            filtros,
+            text="Só as que precisam da Dra. Elvira",
+            command=self._atualizar_todos,
+        )
+        self.filtro_elvira.grid(row=1, column=2, pady=(8, 0), sticky="w")
+
         self.lista_todos = ctk.CTkScrollableFrame(painel)
         self.lista_todos.grid(row=2, column=0, sticky="nsew")
 
@@ -694,6 +754,82 @@ class Aplicacao(ctk.CTk):
         self._definir_estado_assistente(f"Nota criada sem IA: {caminho.name}")
         self._limpar_assistente()
 
+    @staticmethod
+    def _valor_filtro(menu: ctk.CTkOptionMenu, todos: str) -> str | None:
+        valor = menu.get()
+        return None if valor == todos else valor
+
+    def _editar_opcoes(self, linha: int) -> None:
+        """Abre um diálogo para indicar a validação da Dra. Elvira, o colega e a área."""
+        if self.caminho_atual is None:
+            return
+        texto = self._texto_editor()
+        tarefa = _tarefa_na_linha(texto, linha)
+        if tarefa is None:
+            return
+
+        janela = ctk.CTkToplevel(self)
+        janela.title("Opções da tarefa")
+        janela.geometry("440x330")
+        janela.transient(self)
+        janela.after(150, janela.grab_set)
+
+        ctk.CTkLabel(
+            janela, text=tarefa.texto or "(sem texto)", anchor="w", justify="left",
+            wraplength=400, font=ctk.CTkFont(size=14, weight="bold"),
+        ).pack(fill="x", padx=18, pady=(18, 10))
+
+        var_elvira = BooleanVar(value=tarefa.elvira)
+        ctk.CTkCheckBox(
+            janela, text="Precisa de validação da Dra. Elvira", variable=var_elvira
+        ).pack(anchor="w", padx=18, pady=6)
+
+        linha_colega = ctk.CTkFrame(janela, fg_color="transparent")
+        linha_colega.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(linha_colega, text="Colega", width=70, anchor="w").pack(side="left")
+        opcoes_colega = [SEM_COLEGA, *configuracao.colegas()]
+        if tarefa.colega and tarefa.colega not in opcoes_colega:
+            opcoes_colega.append(tarefa.colega)
+        menu_colega = ctk.CTkOptionMenu(linha_colega, values=opcoes_colega, width=200)
+        menu_colega.set(tarefa.colega or SEM_COLEGA)
+        menu_colega.pack(side="left", padx=(0, 8))
+
+        def novo_colega() -> None:
+            nome = ctk.CTkInputDialog(text="Nome do colega:", title="Novo colega").get_input()
+            if not nome or not nome.strip():
+                return
+            lista = configuracao.adicionar_colega(nome)
+            menu_colega.configure(values=[SEM_COLEGA, *lista])
+            menu_colega.set(nome.strip())
+
+        ctk.CTkButton(linha_colega, text="Novo colega…", width=110, command=novo_colega).pack(side="left")
+
+        linha_area = ctk.CTkFrame(janela, fg_color="transparent")
+        linha_area.pack(fill="x", padx=18, pady=6)
+        ctk.CTkLabel(linha_area, text="Área", width=70, anchor="w").pack(side="left")
+        menu_area = ctk.CTkOptionMenu(linha_area, values=list(AREAS), width=200)
+        menu_area.set(tarefa.area)
+        menu_area.pack(side="left")
+
+        def guardar() -> None:
+            colega = menu_colega.get()
+            novo = definir_opcoes(
+                self._texto_editor(),
+                linha,
+                elvira=bool(var_elvira.get()),
+                colega=None if colega == SEM_COLEGA else colega,
+                area=menu_area.get(),
+            )
+            self._mostrar_texto(novo, manter_cursor=True)
+            self._gravar_texto(novo)
+            janela.destroy()
+
+        rodape = ctk.CTkFrame(janela, fg_color="transparent")
+        rodape.pack(side="bottom", fill="x", padx=18, pady=18)
+        ctk.CTkButton(rodape, text="Cancelar", fg_color="transparent", border_width=1,
+                      text_color=("gray10", "gray90"), command=janela.destroy).pack(side="right")
+        ctk.CTkButton(rodape, text="Guardar", command=guardar).pack(side="right", padx=(0, 8))
+
     def _pasta_filtro(self) -> str | None:
         valor = self.filtro_pasta.get()
         if valor == TODAS_PASTAS:
@@ -723,11 +859,19 @@ class Aplicacao(ctk.CTk):
         if self.filtro_pasta.get() not in opcoes:
             self.filtro_pasta.set(TODAS_PASTAS)
 
+        colegas = [TODOS_COLEGAS, *agregado.colegas_disponiveis(todas)]
+        self.filtro_colega.configure(values=colegas)
+        if self.filtro_colega.get() not in colegas:
+            self.filtro_colega.set(TODOS_COLEGAS)
+
         filtradas = agregado.filtrar(
             todas,
             estado=self.filtro_estado.get(),
             pasta=self._pasta_filtro(),
             pesquisa=self.filtro_pesquisa.get(),
+            area=self._valor_filtro(self.filtro_area, TODAS_AREAS),
+            colega=self._valor_filtro(self.filtro_colega, TODOS_COLEGAS),
+            so_elvira=bool(self.filtro_elvira.get()),
         )
         self.contador.configure(text=f"{len(filtradas)} de {len(todas)} tarefas")
 
@@ -755,6 +899,7 @@ class Aplicacao(ctk.CTk):
         caixa.pack(side="left", fill="x", expand=True, padx=(4, 8))
 
         destino = item.nota + (f"  ·  {item.pasta}" if item.pasta else "")
+        destino += f"  ·  {_resumo_opcoes(item.tarefa)}"
         ctk.CTkButton(
             linha,
             text=destino,

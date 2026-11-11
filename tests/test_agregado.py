@@ -70,5 +70,35 @@ class Agregado(unittest.TestCase):
         self.assertEqual(agregado.filtrar(lista, estado="Concluídas", pasta=""), [])
 
 
+class FiltrosDeOpcoes(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.raiz = Path(self._tmp.name)
+        (self.raiz / "Plano.md").write_text(
+            "- [ ] Contrato #procurement @Ana_Silva #elvira\n"
+            "- [ ] Férias #rh @Rui\n"
+            "- [ ] Sem opções\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_filtra_por_area(self):
+        lista = agregado.recolher(self.raiz)
+        self.assertEqual([i.tarefa.texto for i in agregado.filtrar(lista, area="RH")], ["Férias"])
+        self.assertEqual([i.tarefa.texto for i in agregado.filtrar(lista, area="Geral")], ["Sem opções"])
+
+    def test_filtra_por_colega_e_elvira(self):
+        lista = agregado.recolher(self.raiz)
+        self.assertEqual(agregado.colegas_disponiveis(lista), ["Ana Silva", "Rui"])
+        self.assertEqual([i.tarefa.texto for i in agregado.filtrar(lista, colega="Rui")], ["Férias"])
+        self.assertEqual([i.tarefa.texto for i in agregado.filtrar(lista, so_elvira=True)], ["Contrato"])
+
+    def test_opcoes_combinam_se(self):
+        lista = agregado.recolher(self.raiz)
+        self.assertEqual(agregado.filtrar(lista, area="RH", so_elvira=True), [])
+
+
 if __name__ == "__main__":
     unittest.main()

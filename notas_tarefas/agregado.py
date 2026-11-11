@@ -53,17 +53,28 @@ def pastas_disponiveis(lista: list[TarefaDeNota]) -> list[str]:
     return sorted({item.pasta for item in lista if item.pasta}, key=str.lower)
 
 
+def colegas_disponiveis(lista: list[TarefaDeNota]) -> list[str]:
+    """Colegas que aparecem em alguma tarefa, ordenados."""
+    return sorted({i.tarefa.colega for i in lista if i.tarefa.colega}, key=str.lower)
+
+
 def filtrar(
     lista: list[TarefaDeNota],
     estado: str = "Todas",
     pasta: str | None = None,
     pesquisa: str = "",
+    area: str | None = None,
+    colega: str | None = None,
+    so_elvira: bool = False,
 ) -> list[TarefaDeNota]:
     """Aplica os filtros em conjunto.
 
     - ``estado``: "Todas", "Por fazer" ou "Concluídas".
     - ``pasta``: None para todas as pastas, "" para só a raiz, ou o nome de uma pasta.
     - ``pesquisa``: texto que tem de aparecer na tarefa ou no nome da nota.
+    - ``area``: "RH", "Procurement" ou "Geral"; None para todas.
+    - ``colega``: nome do colega; None para todos.
+    - ``so_elvira``: se True, só as tarefas que precisam de validação da Dra. Elvira.
     """
     termo = pesquisa.strip().casefold()
     resultado = []
@@ -75,6 +86,12 @@ def filtrar(
         if pasta is not None and item.pasta != pasta:
             continue
         if termo and termo not in item.tarefa.texto.casefold() and termo not in item.nota.casefold():
+            continue
+        if area is not None and item.tarefa.area != area:
+            continue
+        if colega is not None and item.tarefa.colega != colega:
+            continue
+        if so_elvira and not item.tarefa.elvira:
             continue
         resultado.append(item)
     return resultado

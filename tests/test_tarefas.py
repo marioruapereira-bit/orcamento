@@ -1,6 +1,12 @@
 import unittest
 
-from notas_tarefas.tarefas import Tarefa, acrescentar_tarefa, alternar_tarefa, extrair_tarefas
+from notas_tarefas.tarefas import (
+    Tarefa,
+    acrescentar_tarefa,
+    alternar_tarefa,
+    definir_opcoes,
+    extrair_tarefas,
+)
 
 
 class ExtrairTarefas(unittest.TestCase):
@@ -98,6 +104,45 @@ class AcrescentarTarefa(unittest.TestCase):
             with self.subTest(descricao=descricao):
                 with self.assertRaises(ValueError):
                     acrescentar_tarefa("", descricao)
+
+
+
+class Opcoes(unittest.TestCase):
+    def test_sem_opcoes_usa_geral(self):
+        t = extrair_tarefas("- [ ] Pagar renda")[0]
+        self.assertEqual((t.elvira, t.colega, t.area), (False, None, "Geral"))
+
+    def test_le_opcoes(self):
+        t = extrair_tarefas("- [ ] Rever contrato #procurement @Ana_Silva #elvira")[0]
+        self.assertEqual(t.texto, "Rever contrato")
+        self.assertTrue(t.elvira)
+        self.assertEqual(t.colega, "Ana Silva")
+        self.assertEqual(t.area, "Procurement")
+
+    def test_area_maiusculas_e_ancora(self):
+        t = extrair_tarefas("- [x] Férias #RH ^a1b2")[0]
+        self.assertEqual((t.texto, t.area, t.ancora, t.concluida), ("Férias", "RH", "a1b2", True))
+
+    def test_nao_apanha_arroba_dentro_de_palavra(self):
+        t = extrair_tarefas("- [ ] Enviar para ana@empresa.pt")[0]
+        self.assertEqual(t.texto, "Enviar para ana@empresa.pt")
+        self.assertIsNone(t.colega)
+
+    def test_definir_opcoes_mantem_texto_estado_e_ancora(self):
+        original = "- [x] **Rever** contrato #rh ^a1b2"
+        novo = definir_opcoes(original, 0, elvira=True, colega="Ana Silva", area="Procurement")
+        self.assertEqual(novo, "- [x] **Rever** contrato #elvira @Ana_Silva #procurement ^a1b2")
+        t = extrair_tarefas(novo)[0]
+        self.assertEqual((t.texto, t.concluida, t.ancora), ("**Rever** contrato", True, "a1b2"))
+
+    def test_definir_opcoes_so_mexe_na_linha(self):
+        texto = "Título\n- [ ] A\nparágrafo"
+        novo = definir_opcoes(texto, 1, False, None, "RH")
+        self.assertEqual(novo, "Título\n- [ ] A #rh\nparágrafo")
+
+    def test_area_invalida(self):
+        with self.assertRaises(ValueError):
+            definir_opcoes("- [ ] A", 0, False, None, "Finanças")
 
 
 if __name__ == "__main__":

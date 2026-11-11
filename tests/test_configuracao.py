@@ -30,5 +30,31 @@ class Configuracao(unittest.TestCase):
         self.assertEqual(configuracao.carregar(self.ficheiro), {})
 
 
+class Colegas(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.ficheiro = Path(self._tmp.name) / "cfg.json"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_lista_vazia_por_defeito(self):
+        self.assertEqual(configuracao.colegas(self.ficheiro), [])
+
+    def test_adiciona_sem_duplicados_e_ordena(self):
+        configuracao.adicionar_colega("Rui", self.ficheiro)
+        configuracao.adicionar_colega("ana", self.ficheiro)
+        lista = configuracao.adicionar_colega("Rui", self.ficheiro)
+        self.assertEqual(lista, ["ana", "Rui"])
+
+    def test_nao_perde_outras_chaves(self):
+        configuracao.definir_pasta_notas(Path("D"), self.ficheiro)
+        configuracao.adicionar_colega("Ana", self.ficheiro)
+        self.assertEqual(configuracao.pasta_notas(self.ficheiro), Path("D"))
+
+    def test_nome_vazio_nao_entra(self):
+        self.assertEqual(configuracao.adicionar_colega("  ", self.ficheiro), [])
+
+
 if __name__ == "__main__":
     unittest.main()

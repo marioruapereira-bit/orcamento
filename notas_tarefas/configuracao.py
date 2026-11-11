@@ -29,3 +29,23 @@ def definir_pasta_notas(pasta: Path, caminho: Path = CAMINHO_PREDEFINIDO) -> Non
     dados = carregar(caminho)
     dados["pasta_notas"] = str(pasta)
     guardar(dados, caminho)
+
+
+def colegas(caminho: Path = CAMINHO_PREDEFINIDO) -> list[str]:
+    valor = carregar(caminho).get("colegas")
+    if not isinstance(valor, list):
+        return []
+    return [c for c in valor if isinstance(c, str) and c.strip()]
+
+
+def adicionar_colega(nome: str, caminho: Path = CAMINHO_PREDEFINIDO) -> list[str]:
+    """Acrescenta um colega à lista, sem duplicados, e devolve a lista atualizada."""
+    nome = nome.strip()
+    lista = colegas(caminho)
+    if nome and nome not in lista:
+        lista.append(nome)
+        lista.sort(key=str.lower)
+        dados = carregar(caminho)
+        dados["colegas"] = lista
+        guardar(dados, caminho)
+    return lista
