@@ -28,6 +28,24 @@ A escolha fica guardada em `%USERPROFILE%\.notas_tarefas.json`.
   fechar a app ou trocar de nota com alterações pendentes, a app pergunta.
 - A coluna da direita lista as tarefas da nota aberta.
 
+### Formatação do texto
+
+Selecione um trecho numa linha e use os botões acima do editor, ou os atalhos:
+
+| Botão | Atalho | Resultado no ficheiro |
+|---|---|---|
+| N | Ctrl+B | `**negrito**` |
+| I | Ctrl+I | `*itálico*` |
+| S | Ctrl+U | `<u>sublinhado</u>` |
+| cor | — | `<span style="color:#c0392b">texto</span>` |
+
+As seis cores são Vermelho, Laranja, Verde, Azul, Roxo e Cinzento. Os ficheiros
+continuam legíveis noutros editores de Markdown. Na lista de tarefas, as marcas
+não aparecem, só o texto.
+
+A formatação funciona dentro de uma linha. Se selecionar mais do que uma linha, a
+app avisa.
+
 ### Vista de tarefas
 
 No seletor **Notas / Tarefas**, no topo da coluna da esquerda, a vista

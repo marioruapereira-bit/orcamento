@@ -7,11 +7,11 @@ Este módulo só liga a interface a essas funções.
 from __future__ import annotations
 
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import TclError, filedialog, messagebox
 
 import customtkinter as ctk
 
-from . import agregado, configuracao, notas
+from . import agregado, configuracao, formatacao, notas
 from .tarefas import Tarefa, alternar_tarefa, extrair_tarefas
 
 LARGURA_NOTAS = 260
@@ -45,6 +45,9 @@ class Aplicacao(ctk.CTk):
         self._criar_painel_todos()
 
         self.bind("<Control-s>", lambda _e: self._guardar())
+        self.bind("<Control-b>", lambda _e: self._aplicar_formato("negrito"))
+        self.bind("<Control-i>", lambda _e: self._aplicar_formato("italico"))
+        self.bind("<Control-u>", lambda _e: self._aplicar_formato("sublinhado"))
         self.protocol("WM_DELETE_WINDOW", self._fechar)
 
         self._atualizar_arvore()
@@ -78,10 +81,10 @@ class Aplicacao(ctk.CTk):
         painel = ctk.CTkFrame(self, fg_color="transparent")
         painel.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
         self.painel_editor = painel
-        painel.grid_rowconfigure(1, weight=1)
+        painel.grid_rowconfigure(2, weight=1)
         painel.grid_columnconfigure(0, weight=1)
 
-        topo = ctk.CTkFrame(painel, fg_color="transparent")
+        topo =ctk.CTkFrame(painel, fg_color="transparent")
         topo.grid(row=0, column=0, sticky="ew", pady=(0, 6))
         topo.grid_columnconfigure(0, weight=1)
 
@@ -107,7 +110,24 @@ class Aplicacao(ctk.CTk):
             font=ctk.CTkFont(family="Consolas", size=14),
             state="disabled",
         )
-        self.editor.grid(row=1, column=0, sticky="nsew")
+        barra_formatos = ctk.CTkFrame(painel, fg_color="transparent")
+        barra_formatos.grid(row=1, column=0, sticky="w", pady=(0, 6))
+        negrito = ctk.CTkFont(size=13, weight="bold")
+        ctk.CTkButton(barra_formatos, text="N", width=32, font=negrito,
+                      command=lambda: self._aplicar_formato("negrito")).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(barra_formatos, text="I", width=32, font=ctk.CTkFont(size=13, slant="italic"),
+                      command=lambda: self._aplicar_formato("italico")).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(barra_formatos, text="S", width=32, font=ctk.CTkFont(size=13, underline=True),
+                      command=lambda: self._aplicar_formato("sublinhado")).pack(side="left", padx=(0, 12))
+        for cor in formatacao.PALETA.values():
+            ctk.CTkButton(barra_formatos, text="", width=24, height=24, fg_color=cor, hover_color=cor,
+                          command=lambda c=cor: self._aplicar_formato("cor", c)).pack(side="left", padx=2)
+
+        self.editor.grid(row=2, column=0, sticky="nsew")
+        tk_texto = self.editor._textbox
+        tk_texto.tag_configure("fmt_negrito", font=("Consolas", 14, "bold"))
+        tk_texto.tag_configure("fmt_italico", font=("Consolas", 14, "italic"))
+        tk_texto.tag_configure("fmt_sublinhado", underline=True)
         # Quando o texto muda, o Tk marca a flag "modified". Usamos isso para
         # atualizar o estado (por guardar) e a lista de tarefas.
         self.editor._textbox.bind("<<Modified>>", self._ao_modificar_editor)
@@ -147,6 +167,47 @@ class Aplicacao(ctk.CTk):
             tk_texto.mark_set("insert", cursor)
         tk_texto.edit_modified(False)
         self.editor.configure(state="normal" if self.caminho_atual else "disabled")
+        self._realcar()
+
+    def _realcar(self) -> None:
+        """Aplica as cores, o negrito e o sublinhado do texto, sem alterar o conteúdo."""
+        tk_texto = self.editor._textbox
+        for nome in tk_texto.tag_names():
+            if nome.startswith("fmt_"):
+                tk_texto.tag_remove(nome, "1.0", "end")
+        texto = self._texto_editor()
+        for inicio, fim, nome in formatacao.encontrar(texto):
+            if nome.startswith("fmt_cor_"):
+                tk_texto.tag_configure(nome, foreground=nome[len("fmt_cor_"):])
+            tk_texto.tag_add(nome, f"1.0+{inicio}c", f"1.0+{fim}c")
+
+    def _aplicar_formato(self, nome: str, cor: str | None = None) -> None:
+        """Aplica ou remove uma formatação no texto selecionado (ou no cursor)."""
+        if self.caminho_atual is None:
+            return
+        tk_texto = self.editor._textbox
+        try:
+            ini_tk = tk_texto.index("sel.first")
+            fim_tk = tk_texto.index("sel.last")
+        except TclError:
+            ini_tk = fim_tk = tk_texto.index("insert")
+
+        if "\n" in tk_texto.get(ini_tk, fim_tk):
+            messagebox.showinfo("Formatação", "Selecione texto de uma só linha.", parent=self)
+            return
+
+        texto = self._texto_editor()
+        inicio = len(tk_texto.get("1.0", ini_tk))
+        fim = len(tk_texto.get("1.0", fim_tk))
+        abre, fecha, pode_desfazer = formatacao.marcas_de(nome, cor)
+        novo, n_ini, n_fim = formatacao.alternar_marca(texto, inicio, fim, abre, fecha, pode_desfazer)
+
+        self._mostrar_texto(novo)
+        tk_texto.tag_remove("sel", "1.0", "end")
+        tk_texto.tag_add("sel", f"1.0+{n_ini}c", f"1.0+{n_fim}c")
+        tk_texto.mark_set("insert", f"1.0+{n_fim}c")
+        tk_texto.focus_set()
+        self._atualizar_estado()
 
     def _ao_modificar_editor(self, _evento=None) -> None:
         tk_texto = self.editor._textbox
@@ -195,7 +256,7 @@ class Aplicacao(ctk.CTk):
         for tarefa in tarefas:
             caixa = ctk.CTkCheckBox(
                 self.lista_tarefas,
-                text=tarefa.texto,
+                text=formatacao.sem_marcas(tarefa.texto),
                 command=lambda i=tarefa.linha: self.after_idle(self._alternar_tarefa, i),
             )
             if tarefa.concluida:
@@ -485,7 +546,7 @@ class Aplicacao(ctk.CTk):
 
         caixa = ctk.CTkCheckBox(
             linha,
-            text=item.tarefa.texto,
+            text=formatacao.sem_marcas(item.tarefa.texto),
             command=lambda i=item: self.after_idle(self._alternar_tarefa_de, i.caminho, i.tarefa.linha),
         )
         if item.tarefa.concluida:
